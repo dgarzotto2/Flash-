@@ -1,45 +1,45 @@
 # app.py
 import streamlit as st
-import subprocess
-import shlex
-import os
+import subprocess, shlex
+import tempfile, os
+from datetime import datetime
 from pathlib import Path
 
-st.set_page_config("Live Forensics", layout="wide")
-st.title("🕵️‍♂️ Forensics Dump Dashboard")
+@st.cache_data
+def prepare_dump_script():
+    # Build your old bash script inline:
+    dump = r"""#!/usr/bin/env bash
+TIMESTAMP=$(date '+%Y%m%d_%H%M%S')
+OUTDIR="$HOME/Desktop/forensics_$TIMESTAMP"
+mkdir -p "$OUTDIR"
 
-SCRIPT_PATH = Path(__file__).parent / "forensics_dump.sh"
-DUMP_DIR = Path.home() / "Desktop" / "forensics_dump"
+ss -tulpan  > "$OUTDIR/network_$TIMESTAMP.txt"
+ps auxf       > "$OUTDIR/processes_$TIMESTAMP.txt"
+timeout 60 tcpdump -i "$(ip route|awk '/default/ {print $5}')" -w "$OUTDIR/traffic_$TIMESTAMP.pcap"
+journalctl -xe> "$OUTDIR/journal_$TIMESTAMP.txt"
+dmesg        > "$OUTDIR/dmesg_$TIMESTAMP.txt"
+mount        > "$OUTDIR/mounts_$TIMESTAMP.txt"
+ip addr      > "$OUTDIR/ips_$TIMESTAMP.txt"
+ip route     > "$OUTDIR/routes_$TIMESTAMP.txt"
+ip neigh     > "$OUTDIR/arp_$TIMESTAMP.txt"
+chmod -R 600 "$OUTDIR"
+echo "Dump complete in $OUTDIR"
+"""
+    tf = Path(tempfile.gettempdir()) / "forensics_dump.sh"
+    tf.write_text(dump)
+    tf.chmod(0o700)
+    return str(tf)
 
-def run_dump():
-    """Runs the forensics_dump.sh script and yields its stdout in real time."""
-    cmd = f"bash {SCRIPT_PATH}"
-    with subprocess.Popen(shlex.split(cmd),
-                           stdout=subprocess.PIPE,
-                           stderr=subprocess.STDOUT,
-                           text=True,
-                           bufsize=1) as proc:
-        for line in proc.stdout:
-            yield line
-    return
+st.title("Forensics Dump Dashboard")
 
 if st.button("🚀 Run Forensics Dump"):
-    st.sidebar.info("Dump started… this can take up to a minute.")
-    log_area = st.empty()
-    for chunk in run_dump():
-        # append each new line
-        log_area.text(log_area.text_area("", value="") + chunk)
-    st.sidebar.success("✅ Dump complete!")
-
-# If dump dir exists, let user explore it
-if DUMP_DIR.exists():
-    st.header("🔍 Collected Artifacts")
-    files = sorted(DUMP_DIR.glob("*"), key=os.path.getmtime, reverse=True)
-    for f in files:
-        col1, col2 = st.columns([3,1])
-        col1.write(f.name)
-        col2.download_button(
-            label="Download",
-            data=open(f, "rb").read(),
-            file_name=f.name
-        )
+    script = prepare_dump_script()
+    # Run it and stream output
+    proc = subprocess.Popen(shlex.split(script), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    for line in proc.stdout:
+        st.text(line)
+    proc.wait()
+    if proc.returncode == 0:
+        st.success("All done!")
+    else:
+        st.error(f"Exited with {proc.returncode}")
