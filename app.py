@@ -1,143 +1,190 @@
 import os
 import subprocess
+import sqlite3
+import threading
+import time
 
 import streamlit as st
 import pandas as pd
-from scapy.all import ARP, Ether, srp
+import psutil
+from scapy.all import ARP, Ether, srp, sniff
 import cymruwhois
 import shodan
+from geopy.geocoders import Nominatim
 import folium
 from folium.plugins import AntPath
 from streamlit_folium import st_folium
+from datetime import datetime
 
-# ─── CONFIG ─────────────────────────────────────────────────────────────────────
-st.set_page_config(page_title="MITM Monitor", layout="wide")
+# ─── CONFIG & ENV ──────────────────────────────────────────────────────────────
+from dotenv import load_dotenv
+load_dotenv()  # loads SHODAN_API_KEY from .env
 
-# Your Shodan "spirit key"
-SHODAN_API_KEY = "K79zhLTXa4jLQ9Mq8jLKZYse4FPQeE1"
+SHODAN_API_KEY = os.getenv("SHODAN_API_KEY")
 API_SHODAN     = shodan.Shodan(SHODAN_API_KEY)
-
-# Cymru WHOIS client for ASN lookups
 CYMRU          = cymruwhois.Client()
+GEOCODER       = Nominatim(user_agent="streamlit_mitm_v2")
 
-# Fixed home coordinates (Angeles City, Pampanga)
 HOME_LAT, HOME_LON = 15.172488, 120.522452
+NETWORK            = "192.168.1.0/24"
+LOG_PATH           = r"C:\Windows\System32\LogFiles\Firewall\pfirewall.log"
+DB_PATH            = "flows.db"
 
-# LAN scan network
-NETWORK        = "192.168.1.0/24"
+# ─── DATABASE SETUP ─────────────────────────────────────────────────────────────
+def init_db():
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    c = conn.cursor()
+    c.execute("""
+      CREATE TABLE IF NOT EXISTS flows (
+        ts           TEXT,
+        src_ip       TEXT,
+        dst_ip       TEXT,
+        pid          INTEGER,
+        exe          TEXT,
+        asn          TEXT,
+        org          TEXT,
+        lat          REAL,
+        lon          REAL,
+        UNIQUE(ts, src_ip, dst_ip, pid)
+      )
+    """)
+    conn.commit()
+    return conn
 
-# Windows Firewall log path
-LOG_PATH       = r"C:\Windows\System32\LogFiles\Firewall\pfirewall.log"
+db = init_db()
 
 # ─── HELPERS ────────────────────────────────────────────────────────────────────
-def scan_lan(net=NETWORK, iface=None):
-    """ARP-scan your /24 to list nearby devices."""
+def scan_lan(net=NETWORK):
     pkt = Ether(dst="ff:ff:ff:ff:ff:ff")/ARP(pdst=net)
-    ans, _ = srp(pkt, timeout=2, iface=iface, verbose=False)
+    ans, _ = srp(pkt, timeout=2, verbose=False)
     return [{"IP": r.psrc, "MAC": r.hwsrc} for _, r in ans]
 
-def tail_log(path, lines=200):
-    """Return the last N lines of your firewall log containing ALLOW on port 3544."""
-    cmd = (
-        f"powershell -Command \"Get-Content -Path '{path}' -Tail {lines}\""
-    )
+def tail_flows(path, lines=500):
+    cmd = f"powershell -Command \"Get-Content '{path}' -Tail {lines}\""
     raw = subprocess.getoutput(cmd).splitlines()
     return [l for l in raw if "ALLOW" in l and " 3544 " in l]
 
-def parse_flows(raw_lines):
-    """Split each log line into columns, filter for dst_port 3544, cast PID to int."""
-    cols = [
-        "date","time","action","proto","src_ip","dst_ip",
-        "src_port","dst_port","size","tcpflags","tcpsyn","tcpack",
-        "tcpwin","icmptype","icmpcode","info","path","pid"
-    ]
-    df = (
-        pd.DataFrame([l.split() for l in raw_lines], columns=cols)
-          .query("action=='ALLOW' and dst_port=='3544'")
-          .assign(PID=lambda d: d.pid.astype(int))
+def parse_line(line):
+    cols = line.split()
+    return {
+      "ts":   f"{cols[0]} {cols[1]}",
+      "src_ip": cols[4],
+      "dst_ip": cols[5],
+      "pid":   int(cols[-1]),
+    }
+
+def enrich_and_store(records):
+    for rec in records:
+        # process path lookup
+        try:
+            proc = psutil.Process(rec["pid"])
+            rec["exe"] = proc.exe()
+        except:
+            rec["exe"] = None
+
+        # ASN & Org
+        try:
+            a = CYMRU.lookup(rec["dst_ip"])
+            rec["asn"], rec["org"] = a.asn, a.owner
+        except:
+            rec["asn"], rec["org"] = None, None
+
+        # Geo
+        try:
+            info = API_SHODAN.host(rec["dst_ip"])
+            rec["lat"], rec["lon"] = info.get("latitude"), info.get("longitude")
+        except:
+            rec["lat"], rec["lon"] = None, None
+
+        # write to DB
+        c = db.cursor()
+        c.execute("""
+          INSERT OR IGNORE INTO flows
+            (ts, src_ip, dst_ip, pid, exe, asn, org, lat, lon)
+          VALUES
+            (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, tuple(rec[k] for k in ("ts","src_ip","dst_ip","pid","exe","asn","org","lat","lon")))
+    db.commit()
+
+def load_flows(limit=1000):
+    df = pd.read_sql_query(
+      "SELECT * FROM flows ORDER BY ts DESC LIMIT ?", db, params=(limit,)
     )
+    df["ts"] = pd.to_datetime(df["ts"])
     return df
 
-def lookup_asn(ip):
-    """Return (ASN, Org) via Cymru lookup, or (None,None)."""
-    try:
-        rec = CYMRU.lookup(ip)
-        return rec.asn, rec.owner
-    except:
-        return None, None
+def background_sniffer():
+    # optional: live UDP‐3544 sniffing—in parallel
+    def handler(pkt):
+        if pkt.haslayer('UDP') and pkt['UDP'].dport==3544:
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            enrich_and_store([{"ts":now, "src_ip":pkt.src, "dst_ip":pkt.dst, "pid":0}])
+    sniff(filter="udp port 3544", prn=handler, store=False)
 
-def geo_shodan(ip):
-    """Return (lat, lon) via Shodan, or (None,None) on failure."""
-    try:
-        rec = API_SHODAN.host(ip)
-        return rec.get("latitude"), rec.get("longitude")
-    except:
-        return None, None
+# start background thread
+threading.Thread(target=background_sniffer, daemon=True).start()
 
-# ─── SIDEBAR ───────────────────────────────────────────────────────────────────
+# ─── STREAMLIT LAYOUT ──────────────────────────────────────────────────────────
+st.set_page_config(layout="wide", page_title="MITM Monitor v2")
+
+# auto-refresh every 30s
+count = st_autorefresh(interval=30*1000, limit=None, key="refresh")
+
+# Sidebar controls
 st.sidebar.title("Controls")
-
 if st.sidebar.button("🔍 Scan LAN"):
-    with st.spinner("Scanning LAN…"):
-        st.session_state["devices"] = scan_lan()
+    st.session_state["devices"] = scan_lan()
 
-st.sidebar.markdown("---")
+if st.sidebar.button("📜 Refresh Flows"):
+    raw = tail_flows(LOG_PATH)
+    recs = [parse_line(l) for l in raw]
+    enrich_and_store(recs)
+    st.sidebar.success("Flows refreshed.")
 
-if st.sidebar.button("📜 Tail Teredo Flows"):
-    with st.spinner("Reading firewall log…"):
-        raw = tail_log(LOG_PATH)
-        df = parse_flows(raw)
-        # Enrich with ASN & geo
-        df["ASN"], df["Org"] = zip(*df.dst_ip.map(lookup_asn))
-        df["Lat"], df["Lon"] = zip(*df.dst_ip.map(geo_shodan))
-        st.session_state["flows"] = df
+# Filters
+flows_df = load_flows()
+asns      = sorted(flows_df["asn"].dropna().unique())
+selected  = st.sidebar.multiselect("Filter by ASN", asns, default=asns)
 
-# ─── MAIN LAYOUT ──────────────────────────────────────────────────────────────
-st.title("MITM Monitor – Streamlined Dashboard")
+# Main page
+st.title("MITM Monitor – Production Forensics Console")
 col1, col2 = st.columns([2,3])
 
 with col1:
     st.subheader("Nearby LAN Devices")
-    devices = st.session_state.get("devices", [])
-    if devices:
-        st.dataframe(pd.DataFrame(devices), height=350)
+    devs = st.session_state.get("devices", [])
+    if devs:
+        st.dataframe(pd.DataFrame(devs), height=300)
     else:
-        st.info("► Click “Scan LAN” to discover local hosts.")
+        st.info("Click “Scan LAN”")
 
 with col2:
-    st.subheader("Recent Teredo Flows (port 3544)")
-    flows = st.session_state.get("flows", pd.DataFrame())
-    if not flows.empty:
-        st.dataframe(
-            flows[["date","time","src_ip","dst_ip","path","pid","ASN","Org"]],
-            height=350
-        )
-    else:
-        st.info("► Click “Tail Teredo Flows” to load recent tunnel traffic.")
+    st.subheader("Recent Teredo Flows")
+    filt = flows_df[flows_df["asn"].isin(selected)]
+    st.dataframe(
+      filt[["ts","src_ip","dst_ip","exe","pid","asn","org"]],
+      height=300
+    )
+    st.line_chart(
+      filt.set_index("ts").resample("1Min").size(),
+      height=150,
+      use_container_width=True,
+      title="Flows per Minute"
+    )
 
 st.markdown("---")
-st.subheader("Interactive Flow Map")
-
-# Center the map on your fixed coordinates
+st.subheader("Flow Map")
 center = [HOME_LAT, HOME_LON]
-m = folium.Map(location=center, zoom_start=5)
+m = folium.Map(location=center, zoom_start=4)
+folium.Marker(center, tooltip="You", icon=folium.Icon(color="blue")).add_to(m)
 
-# Mark your location
-folium.Marker(
-    center,
-    tooltip="You",
-    icon=folium.Icon(color="blue")
-).add_to(m)
-
-# Plot each flow endpoint and draw an arc
-for _, r in flows.iterrows():
-    if pd.notna(r.Lat) and pd.notna(r.Lon):
+for _, r in filt.iterrows():
+    if pd.notna(r.lat) and pd.notna(r.lon):
         folium.Marker(
-            [r.Lat, r.Lon],
-            tooltip=f"{r.dst_ip} (ASN {r.ASN})",
+            [r.lat, r.lon],
+            tooltip=f"{r.dst_ip} (ASN {r.asn})",
             icon=folium.Icon(color="red")
         ).add_to(m)
-        AntPath(locations=[center, [r.Lat, r.Lon]], color="red", weight=2).add_to(m)
+        AntPath(locations=[center, [r.lat, r.lon]], color="red", weight=2).add_to(m)
 
-# Render the map
-st_folium(m, width="100%", height=500)
+st_folium(m, width="100%", height=450)
