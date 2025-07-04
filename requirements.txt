@@ -1,0 +1,8 @@
+streamlit
+scapy
+pandas
+cymruwhois
+shodan
+geopy
+folium
+streamlit-folium
