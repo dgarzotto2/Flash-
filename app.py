@@ -1,12 +1,10 @@
 import os
 import sys
 import hashlib
-import subprocess
-from pathlib import Path
 import shutil
 import tempfile
 import requests
-import py7zr  # Added for 7z extraction
+import py7zr  # Import the py7zr library for 7z extraction
 
 def sha256sum(path):
     h = hashlib.sha256()
@@ -69,4 +67,46 @@ def main():
     
     if choice == 'Use a local file':
         path = st.text_input("Enter path to the BIOS .exe file:")
-        exe_pat_
+        exe_path = Path(path).expanduser().resolve()
+        if not exe_path.exists():
+            st.error("❌ File not found.")
+            return
+    else:
+        url = st.text_input("Enter URL to the BIOS .exe file:")
+        temp_dir = Path(tempfile.mkdtemp())
+        exe_path = temp_dir / url.split("/")[-1]
+        download_file(url, exe_path)
+
+    # Ask output path
+    output_folder = st.text_input("Enter output directory", "bios_output").strip()
+    output_dir = Path(output_folder).resolve()
+
+    # Extract and find firmware
+    work_dir = Path("/tmp/bios_extract")
+    if work_dir.exists():
+        shutil.rmtree(work_dir)
+    work_dir.mkdir()
+
+    extract_exe(exe_path, work_dir)
+    firmwares = find_firmware(work_dir)
+    if firmwares:
+        copy_to_output(firmwares, output_dir)
+
+        st.write("\n💡 To launch FreeDOS with QEMU and run the BIOS EXE:")
+        st.code(f"""
+qemu-system-i386 \\
+  -m 256 \\
+  -cdrom FD14-full.iso \\
+  -hda freedos.img \\
+  -boot d \\
+  -hdb fat:rw:{output_dir} \\
+  -nographic
+
+📦 Inside FreeDOS, type:
+  {exe_path.name}
+        """)
+    else:
+        st.warning("⚠️ No firmware files extracted. Nothing to do.")
+
+if __name__ == "__main__":
+    main()
