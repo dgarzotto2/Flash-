@@ -12,7 +12,7 @@ def install(package):
 # Install required dependencies
 install('py7zr')
 install('requests')
-install('streamlit')
+install('streamlit')  # Corrected to 'streamlit' instead of 'streamlist'
 
 # Now, proceed with the rest of your Streamlit app code
 import streamlit as st
@@ -81,3 +81,59 @@ def download_file(url, target_path):
 
 # Main Streamlit app function
 def main():
+    st.title("📁 BIOS Flash Tool (Headless + Interactive)\n")
+
+    # Ask user for source
+    choice = st.selectbox(
+        "Do you want to:",
+        ["Use a local file", "Download from a URL"]
+    )
+
+    if choice == "Use a local file":
+        path = st.text_input("Enter path to the BIOS .exe file:")
+        exe_path = Path(path).expanduser().resolve()
+        if not exe_path.exists():
+            st.error("❌ File not found.")
+            return
+    elif choice == "Download from a URL":
+        url = st.text_input("Enter URL to the BIOS .exe file:")
+        temp_dir = Path(tempfile.mkdtemp())
+        exe_path = temp_dir / url.split("/")[-1]
+        download_file(url, exe_path)
+    else:
+        st.error("❌ Invalid choice.")
+        return
+
+    # Ask for the output path
+    output_folder = st.text_input("Enter output directory [default: bios_output]:", "bios_output")
+    output_dir = Path(output_folder).resolve()
+
+    # Extract and find firmware
+    work_dir = Path("/tmp/bios_extract")
+    if work_dir.exists():
+        shutil.rmtree(work_dir)
+    work_dir.mkdir()
+
+    extract_exe(exe_path, work_dir)
+    firmwares = find_firmware(work_dir)
+    if firmwares:
+        copy_to_output(firmwares, output_dir)
+
+        st.write("\n💡 To launch FreeDOS with QEMU and run the BIOS EXE:")
+        st.code(f"""
+qemu-system-i386 \\
+  -m 256 \\
+  -cdrom FD14-full.iso \\
+  -hda freedos.img \\
+  -boot d \\
+  -hdb fat:rw:{output_dir} \\
+  -nographic
+
+📦 Inside FreeDOS, type:
+  {exe_path.name}
+        """)
+    else:
+        st.warning("⚠️ No firmware files extracted. Nothing to do.")
+
+if __name__ == "__main__":
+    main()
