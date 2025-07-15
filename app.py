@@ -5,7 +5,6 @@ import hashlib
 import subprocess
 from pathlib import Path
 import shutil
-import argparse
 import tempfile
 import requests
 
@@ -17,7 +16,7 @@ def sha256sum(path):
     return h.hexdigest()
 
 def extract_exe(exe_path, extract_dir):
-    print(f"📦 Extracting {exe_path} ...")
+    print(f"\n📦 Extracting {exe_path} ...")
     result = subprocess.run(["7z", "x", str(exe_path), f"-o{extract_dir}"], capture_output=True)
     if result.returncode != 0:
         print("❌ Extraction failed:")
@@ -60,24 +59,33 @@ def download_file(url, target_path):
         sys.exit(1)
 
 def main():
-    parser = argparse.ArgumentParser(description="Offline BIOS Flash Tool (headless)")
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument('--input', '-i', help='Path to local BIOS .exe file')
-    group.add_argument('--url', '-u', help='URL to download BIOS .exe from')
-    parser.add_argument('--output', '-o', default='bios_output', help='Output directory')
-    args = parser.parse_args()
+    print("📁 BIOS Flash Tool (Headless + Interactive)\n")
 
-    if args.url:
-        temp_dir = tempfile.mkdtemp()
-        bios_name = args.url.split("/")[-1]
-        exe_path = Path(temp_dir) / bios_name
-        download_file(args.url, exe_path)
-    else:
-        exe_path = Path(args.input).resolve()
+    # Ask user for source
+    choice = input("Do you want to (1) use a local file or (2) download from a URL? [1/2]: ").strip()
+    if choice == '1':
+        path = input("Enter path to the BIOS .exe file: ").strip()
+        exe_path = Path(path).expanduser().resolve()
         if not exe_path.exists():
-            print("❌ BIOS .exe not found.")
+            print("❌ File not found.")
             sys.exit(1)
+    elif choice == '2':
+        url = input("Enter URL to the BIOS .exe file: ").strip()
+        temp_dir = Path(tempfile.mkdtemp())
+        exe_path = temp_dir / url.split("/")[-1]
+        download_file(url, exe_path)
+    else:
+        print("❌ Invalid choice.")
+        sys.exit(1)
 
+    # Ask output path
+    output_folder = input("Enter output directory [default: bios_output]: ").strip()
+    if not output_folder:
+        output_folder = "bios_output"
+
+    output_dir = Path(output_folder).resolve()
+
+    # Extract and find firmware
     work_dir = Path("/tmp/bios_extract")
     if work_dir.exists():
         shutil.rmtree(work_dir)
@@ -86,24 +94,23 @@ def main():
     extract_exe(exe_path, work_dir)
     firmwares = find_firmware(work_dir)
     if firmwares:
-        output_dir = Path(args.output)
         copy_to_output(firmwares, output_dir)
 
-        print("\n💡 To launch the BIOS EXE in FreeDOS via QEMU:")
+        print("\n💡 To launch FreeDOS with QEMU and run the BIOS EXE:")
         print(f"""
 qemu-system-i386 \\
   -m 256 \\
   -cdrom FD14-full.iso \\
   -hda freedos.img \\
   -boot d \\
-  -hdb fat:rw:{output_dir.resolve()} \\
+  -hdb fat:rw:{output_dir} \\
   -nographic
 
-📦 Inside FreeDOS:
+📦 Inside FreeDOS, type:
   {exe_path.name}
         """)
     else:
-        print("⚠️ Nothing to prepare. No firmware found.")
+        print("⚠️ No firmware files extracted. Nothing to do.")
 
 if __name__ == "__main__":
     main()
