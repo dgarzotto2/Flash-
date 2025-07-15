@@ -55,19 +55,4 @@ def download_file(url, target_path):
                 f.write(chunk)
         st.success(f"✅ Downloaded to: {target_path}")
     except Exception as e:
-        st.error(f"❌ Failed to download: {e}")
-        return False
-    return True
-
-# Streamlit layout configuration
-st.title("📁 BIOS Flash Tool (Interactive)")
-
-# Option 1: File Upload (Local File)
-uploaded_file = st.file_uploader("Upload BIOS .exe file", type=['exe'])
-
-# Option 2: Download from URL
-url_input = st.text_input("Or enter the URL to download BIOS .exe file")
-
-# If the user has selected to download from URL
-if url_input:
-    if st.button("Download BIOS"):
+        st.error(f"❌ Failed to download: {
