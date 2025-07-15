@@ -8,5 +8,4 @@ pyppmd==1.2.0
 pybcj==1.0.6
 multivolumefile==0.2.3
 inflate64==1.0.3
-imghdr
 requests==2.26.0
