@@ -2,13 +2,18 @@ import subprocess
 import sys
 import os
 import streamlit as st
+import shutil
+import hashlib
+import tempfile
+import requests
+from pathlib import Path
 
 # Function to install packages using pip
 def install_package(package_name):
     subprocess.check_call([sys.executable, "-m", "pip", "install", package_name])
 
 # Try installing required packages
-required_packages = ["streamlit", "py7zr", "rich", "pycryptodomex", "brotli", "psutil", "pyzstd", "pyppmd", "pybcj", "multivolumefile", "inflate64"]
+required_packages = ["streamlit", "py7zr", "pycryptodomex", "brotli", "psutil", "pyzstd", "pyppmd", "pybcj", "multivolumefile", "inflate64"]
 
 for package in required_packages:
     try:
@@ -19,11 +24,6 @@ for package in required_packages:
 
 # After installing, import the packages
 import py7zr  # We will use py7zr to extract 7z files
-import shutil
-import hashlib
-import tempfile
-import requests
-from pathlib import Path
 
 # Function to calculate sha256 checksum
 def sha256sum(path):
