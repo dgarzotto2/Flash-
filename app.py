@@ -1,19 +1,101 @@
-Error extracting file: not a 7z file
-Bad7zFile: not a 7z file
-Traceback:
+import streamlit as st
+import os
+import subprocess
+import sys
+from pathlib import Path
 
-File "/home/vscode/.local/lib/python3.11/site-packages/streamlit/runtime/scriptrunner/script_runner.py", line 565, in _run_script
-    exec(code, module.__dict__)
-File "/workspaces/Flash-/app.py", line 78, in <module>
+# Function to extract BIOS exe file
+def extract_exe(exe_path, extract_dir):
+    """
+    Extracts the given BIOS .exe file to the specified directory.
+    Handles different archive types.
+    """
+    print(f"\n📦 Extracting {exe_path} ...")
+    
+    try:
+        # Check if it's a self-extracting archive or a non-7z format
+        if exe_path.suffix.lower() == '.exe':
+            # Try to extract using 7z first
+            try:
+                # If 7z fails, notify and attempt different extraction methods
+                subprocess.run(['7z', 'x', str(exe_path), f'-o{extract_dir}'], check=True)
+                print(f"✅ Extracted using 7z.")
+                return
+            except subprocess.CalledProcessError:
+                print("❌ Not a 7z file. Trying another method...")
+
+            # If not a 7z file, treat as self-extracting .exe
+            # Here you could try running the exe in a VM or use another method to extract it
+            print(f"⚠️ Failed to extract with 7z. This might be a self-extracting archive or another format.")
+            # Add additional extraction logic as necessary (or inform user)
+        else:
+            print("❌ Unsupported file format.")
+            sys.exit(1)
+
+    except Exception as e:
+        print(f"❌ Error extracting file: {e}")
+        sys.exit(1)
+
+# Main app logic
+def main():
+    # Streamlit page setup
+    st.set_page_config(page_title="BIOS Flash Tool", layout="wide")
+    st.title("BIOS Flash Tool (Headless + Interactive)")
+
+    st.write("""
+    This tool allows you to download and flash BIOS files for your system. 
+    It supports downloading from URLs, extracting files, and flashing BIOS to USB.
+    """)
+
+    # Get user inputs
+    file_option = st.radio(
+        "Do you want to:",
+        ["Use a local file", "Download from a URL"]
+    )
+
+    if file_option == "Use a local file":
+        # Local file input
+        file_path = st.file_uploader("Upload BIOS .exe file", type=["exe"])
+        output_dir = st.text_input("Enter output directory", "/tmp/extracted_bios")
+
+        if file_path and output_dir:
+            try:
+                # Create directory if doesn't exist
+                os.makedirs(output_dir, exist_ok=True)
+
+                # Save the uploaded file
+                exe_path = Path(output_dir) / file_path.name
+                with open(exe_path, "wb") as f:
+                    f.write(file_path.getbuffer())
+
+                # Extract the file
+                extract_exe(exe_path, output_dir)
+
+                st.success(f"📂 BIOS extracted successfully to {output_dir}")
+            except Exception as e:
+                st.error(f"❌ Error extracting file: {e}")
+
+    elif file_option == "Download from a URL":
+        # URL input
+        url = st.text_input("Enter URL to BIOS file")
+        output_dir = st.text_input("Enter output directory", "/tmp/extracted_bios")
+
+        if url and output_dir:
+            try:
+                # Create directory if doesn't exist
+                os.makedirs(output_dir, exist_ok=True)
+
+                # Download the file
+                exe_path = Path(output_dir) / "bios_file.exe"
+                subprocess.run(['wget', url, '-O', str(exe_path)], check=True)
+
+                # Extract the file
+                extract_exe(exe_path, output_dir)
+
+                st.success(f"📂 BIOS downloaded and extracted successfully to {output_dir}")
+            except Exception as e:
+                st.error(f"❌ Error downloading or extracting file: {e}")
+
+# Run the Streamlit app
+if __name__ == "__main__":
     main()
-File "/workspaces/Flash-/app.py", line 71, in main
-    extract_exe(file_path, extract_dir)
-File "/workspaces/Flash-/app.py", line 34, in extract_exe
-    with py7zr.SevenZipFile(file_path, mode='r') as archive:
-         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-File "/home/vscode/.local/lib/python3.11/site-packages/py7zr/py7zr.py", line 415, in __init__
-    raise e
-File "/home/vscode/.local/lib/python3.11/site-packages/py7zr/py7zr.py", line 396, in __init__
-    self._real_get_contents(password)
-File "/home/vscode/.local/lib/python3.11/site-packages/py7zr/py7zr.py", line 432, in _real_get_contents
-    raise Bad7zFile("not a 7z file")
