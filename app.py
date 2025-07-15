@@ -6,7 +6,7 @@ from pathlib import Path
 import shutil
 import tempfile
 import requests
-import streamlit as st
+import py7zr  # Added for 7z extraction
 
 def sha256sum(path):
     h = hashlib.sha256()
@@ -17,12 +17,15 @@ def sha256sum(path):
 
 def extract_exe(exe_path, extract_dir):
     st.write(f"📦 Extracting {exe_path} ...")
-    result = subprocess.run(["7z", "x", str(exe_path), f"-o{extract_dir}"], capture_output=True)
-    if result.returncode != 0:
-        st.error("❌ Extraction failed:")
-        st.error(result.stderr.decode())
+    
+    try:
+        # Use py7zr to extract 7z files
+        with py7zr.SevenZipFile(exe_path, mode='r') as archive:
+            archive.extractall(path=str(extract_dir))
+        st.success("✅ Extraction complete.\n")
+    except Exception as e:
+        st.error(f"❌ Extraction failed: {e}")
         sys.exit(1)
-    st.success("✅ Extraction complete.\n")
 
 def find_firmware(extract_dir):
     st.write("🔍 Searching for firmware files...")
@@ -43,7 +46,7 @@ def copy_to_output(firmwares, output_dir):
     output_dir.mkdir(exist_ok=True)
     for f in firmwares:
         shutil.copy2(f, output_dir / f.name)
-    st.success(f"\n📤 Firmware copied to: {output_dir}")
+    st.write(f"\n📤 Firmware copied to: {output_dir}")
 
 def download_file(url, target_path):
     st.write(f"🌐 Downloading BIOS from: {url}")
@@ -56,63 +59,14 @@ def download_file(url, target_path):
         st.success(f"✅ Downloaded to: {target_path}")
     except Exception as e:
         st.error(f"❌ Failed to download: {e}")
-        return False
-    return True
+        sys.exit(1)
 
 def main():
-    st.title("📁 BIOS Flash Tool (Headless + Interactive)")
+    st.title("📁 BIOS Flash Tool (Headless + Interactive)\n")
 
     # Ask user for source
-    choice = st.radio("Do you want to:", ("Use a local file", "Download from a URL"))
-    exe_path = None
-    if choice == "Use a local file":
+    choice = st.radio("Do you want to:", ['Use a local file', 'Download from a URL'])
+    
+    if choice == 'Use a local file':
         path = st.text_input("Enter path to the BIOS .exe file:")
-        if path:
-            exe_path = Path(path).expanduser().resolve()
-            if not exe_path.exists():
-                st.error("❌ File not found.")
-                return
-    elif choice == "Download from a URL":
-        url = st.text_input("Enter URL to the BIOS .exe file:")
-        if url:
-            temp_dir = Path(tempfile.mkdtemp())
-            exe_path = temp_dir / url.split("/")[-1]
-            if not download_file(url, exe_path):
-                return
-    else:
-        st.error("❌ Invalid choice.")
-        return
-
-    # Ask output path
-    output_folder = st.text_input("Enter output directory", "bios_output")
-    output_dir = Path(output_folder).resolve()
-
-    # Extract and find firmware
-    work_dir = Path("/tmp/bios_extract")
-    if work_dir.exists():
-        shutil.rmtree(work_dir)
-    work_dir.mkdir()
-
-    extract_exe(exe_path, work_dir)
-    firmwares = find_firmware(work_dir)
-    if firmwares:
-        copy_to_output(firmwares, output_dir)
-
-        st.write("\n💡 To launch FreeDOS with QEMU and run the BIOS EXE:")
-        st.code(f"""
-qemu-system-i386 \\
-  -m 256 \\
-  -cdrom FD14-full.iso \\
-  -hda freedos.img \\
-  -boot d \\
-  -hdb fat:rw:{output_dir} \\
-  -nographic
-
-📦 Inside FreeDOS, type:
-  {exe_path.name}
-        """)
-    else:
-        st.warning("⚠️ No firmware files extracted. Nothing to do.")
-
-if __name__ == "__main__":
-    main()
+        exe_pat_
