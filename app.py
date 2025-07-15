@@ -4,11 +4,12 @@ import hashlib
 import shutil
 import tempfile
 import requests
-import py7zr  # Import the py7zr library for 7z extraction
+import py7zr  # We will use py7zr to extract 7z files
 from pathlib import Path
 import streamlit as st
 
 def sha256sum(path):
+    """Calculate the SHA256 hash of a file."""
     h = hashlib.sha256()
     with open(path, 'rb') as f:
         while chunk := f.read(8192):
@@ -16,10 +17,10 @@ def sha256sum(path):
     return h.hexdigest()
 
 def extract_exe(exe_path, extract_dir):
+    """Extract .exe files that are 7z archives using py7zr."""
     st.write(f"📦 Extracting {exe_path} ...")
     
     try:
-        # Use py7zr to extract 7z files
         with py7zr.SevenZipFile(exe_path, mode='r') as archive:
             archive.extractall(path=str(extract_dir))
         st.success("✅ Extraction complete.\n")
@@ -28,6 +29,7 @@ def extract_exe(exe_path, extract_dir):
         sys.exit(1)
 
 def find_firmware(extract_dir):
+    """Search for firmware files in the extracted directory."""
     st.write("🔍 Searching for firmware files...")
     firmwares = []
     for root, _, files in os.walk(extract_dir):
@@ -43,12 +45,14 @@ def find_firmware(extract_dir):
     return firmwares
 
 def copy_to_output(firmwares, output_dir):
+    """Copy the found firmware files to the output directory."""
     output_dir.mkdir(exist_ok=True)
     for f in firmwares:
         shutil.copy2(f, output_dir / f.name)
     st.write(f"\n📤 Firmware copied to: {output_dir}")
 
 def download_file(url, target_path):
+    """Download the BIOS file from the provided URL."""
     st.write(f"🌐 Downloading BIOS from: {url}")
     try:
         response = requests.get(url, stream=True, timeout=30)
@@ -62,9 +66,10 @@ def download_file(url, target_path):
         sys.exit(1)
 
 def main():
+    """Main function to run the BIOS flashing process."""
     st.title("📁 BIOS Flash Tool (Headless + Interactive)\n")
 
-    # Ask user for source
+    # Ask user for source of BIOS file
     choice = st.radio("Do you want to:", ['Use a local file', 'Download from a URL'])
     
     if choice == 'Use a local file':
@@ -83,14 +88,17 @@ def main():
     output_folder = st.text_input("Enter output directory", "bios_output").strip()
     output_dir = Path(output_folder).resolve()
 
-    # Extract and find firmware
+    # Create work directory for extraction
     work_dir = Path("/tmp/bios_extract")
     if work_dir.exists():
         shutil.rmtree(work_dir)
     work_dir.mkdir()
 
+    # Extract the BIOS file and look for firmware files
     extract_exe(exe_path, work_dir)
     firmwares = find_firmware(work_dir)
+
+    # If firmware files are found, copy to output
     if firmwares:
         copy_to_output(firmwares, output_dir)
 
