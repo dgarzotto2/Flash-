@@ -1,11 +1,6 @@
 streamlit==1.22.0
 py7zr==1.0.0
-pycryptodomex==3.23.0
-psutil==7.0.0
-brotli==1.1.0
-pyzstd==0.17.0
-pyppmd==1.2.0
-pybcj==1.0.6
-multivolumefile==0.2.3
-inflate64==1.0.3
-requests==2.26.0
+requests
+pycryptodomex
+rich
+markdown-it-py
