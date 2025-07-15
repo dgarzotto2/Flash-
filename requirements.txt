@@ -1,3 +1,2 @@
-streamlist
-py7zr
+streamlit
 requests
